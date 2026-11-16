@@ -1,0 +1,10 @@
+This document details what the teacher wants us to do.
+
+model 1: PCA
+
+model 2: Vasicheck
+- before replicate vasichek with the given inputs in the sldies
+- then we move on to estimate it with AR(1) of short term interest rates on itself. Lamnda should minimize the sum of square between the model generated price and the market yield
+- then also add the discrete time model
+
+model 3: Vasichek plus one of the factors estimated in PCA.
