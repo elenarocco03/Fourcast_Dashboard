@@ -14,8 +14,12 @@ function params = vasicek_fit(data, opts)
 %   and observed yields, given the parameters of step 1. The model yield is
 %   linear in lambda, so the solution is in closed form.
 %
+%   Step 3 - persistence phi of the fit error e = observed - model, per
+%   maturity (AR(1) through the origin), used to anchor the forecast.
+%
 %   params  kappa, rbar, sigma, lambda, plus a, b, halflife, se (standard
-%           errors), rmse (fit error per maturity), n, dt
+%           errors), rmse (fit error per maturity), phi and tau (error
+%           persistence per step and its maturities), n, dt
 
 arguments
     data struct
@@ -92,7 +96,16 @@ end
 
 % Fit error per maturity over the whole sample (root mean squared, decimals)
 Rmodel      = vasicek_yields(params, data.r, data.tau);
-params.rmse = sqrt(mean((data.Y - Rmodel).^2, 1));
+E           = data.Y - Rmodel;               % fit error e(tau), one column per maturity
+params.rmse = sqrt(mean(E.^2, 1));
+
+% ---- Step 3: persistence of the fit error (used to anchor the forecast) ---
+% AR(1) through the origin, per maturity: e(t+dt) = phi e(t) + noise.
+% phi near 1: the error lasts; phi near 0: it disappears in one step.
+x = E(1:end-1, :);
+y = E(2:end, :);
+params.phi = min(max(sum(x .* y, 1) ./ sum(x.^2, 1), 0), 1);   % kept in [0, 1]
+params.tau = data.tau;                       % maturities phi refers to
 end
 
 

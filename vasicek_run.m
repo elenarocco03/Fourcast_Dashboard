@@ -8,6 +8,7 @@
 
 from     = datetime(2000, 1, 1);    % sample start (from 2010 the 3M shows no mean reversion: b >= 1)
 hMonths  = 3;                       % forecast horizon in months
+anchor   = "decay";                 % "decay", "full" or "none" (see vasicek_forecast)
 freqs    = ["daily" "monthly"];
 
 T = fred_yield_history();           % daily FRED history, yields in %
@@ -36,6 +37,8 @@ for freq = freqs
             params.lambda, params.lambdaDates);
     fprintf('  fit error (RMSE, bp):');
     fprintf(' %s %s', [data.labels; compose('%.0f', 1e4 * params.rmse)]);
+    fprintf('\n  error left after %d months (phi^h):', hMonths);
+    fprintf(' %s %s', [data.labels; compose('%.0f%%', 100 * params.phi .^ (hMonths / 12 / data.dt))]);
     fprintf('\n');
 
     %% 2. Model vs observed curve, last date
@@ -44,7 +47,9 @@ for freq = freqs
     Rmodel = vasicek_yields(params, r0, data.tau);
 
     %% 3. Forecast h months ahead
-    [mu, sd] = vasicek_forecast(params, r0, data.tau, hMonths / 12);
+    % anchored to today's curve, the fit error decaying at its estimated speed
+    [mu, sd, muModel] = vasicek_forecast(params, r0, data.tau, hMonths / 12, ...
+                                         anchor=anchor, Yobs=Yobs);
 
     %% 4. Charts
     figure('Name', "Vasicek - " + freq, 'Position', [100 100 1100 420]);
@@ -61,9 +66,10 @@ for freq = freqs
     fill([data.tau, fliplr(data.tau)], 100 * [mu + sd, fliplr(mu - sd)], ...
          [0.8 0.85 1], 'EdgeColor', 'none'); hold on
     plot(data.tau, 100 * mu, 'b-', 'LineWidth', 1.5);
+    plot(data.tau, 100 * muModel, 'b--', 'LineWidth', 1);
     plot(data.tau, 100 * Yobs, 'ko-', 'LineWidth', 1);
     xlabel('Maturity (years)'); ylabel('Yield (%)'); grid on
-    legend('\pm 1 s.d.', sprintf('Forecast in %d months', hMonths), ...
-           "Observed " + lastDay, 'Location', 'best');
+    legend('\pm 1 s.d.', sprintf('Forecast in %d months (anchor "%s")', hMonths, anchor), ...
+           'Pure model forecast', "Observed " + lastDay, 'Location', 'best');
     title(sprintf('Vasicek forecast, %d months ahead (%s data)', hMonths, freq));
 end
