@@ -40,6 +40,12 @@ Files
   fred_yield_curve.m    downloads the Treasury yields from the FRED API
   fred_yield_history.m  keeps the saved history in data/ up to date
   setup_fred_key.m      saves your FRED API key (run once)
+  yield_sample.m        sample of the 10 published maturities (1M-20Y), in decimals
+  vasicek_fit.m         Vasicek: AR(1) of the 3M yield (kappa, rbar, sigma), lambda on yields
+  vasicek_yields.m      Vasicek model yields (Mele eq. 10)
+  vasicek_forecast.m    Vasicek forecast, mean and s.d. (Mele p. 123), optional anchor
+  vasicek_slides_check.m  replicates the Vasicek examples of the slides
+  vasicek_run.m         Vasicek estimation script, daily and monthly, from 2000
 
 Notes
 -----

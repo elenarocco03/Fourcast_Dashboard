@@ -13,6 +13,10 @@ function dashboard
 %     curvature) over the period and frequency of the Control panel; engine
 %     in pca_curva.m. Maturities fixed as in Mele p. 91 without the 30Y
 %     (1Y ... 20Y, 15Y interpolated). Two views: Loadings and Factors.
+%   Section 3: Vasicek - short-rate model estimated from the sample start and
+%     frequency of the Control panel (vasicek_fit.m); parameters, model vs
+%     observed curve today, and the forecast h months ahead with a +/- 1 s.d.
+%     band (vasicek_forecast.m). Maturities: the 10 published ones, 1M ... 20Y.
 %   Style: deep navy background, soft blue accent.
 %   Setup: see README.txt (each user needs a free FRED API key).
 
@@ -56,6 +60,7 @@ tabs    = uitabgroup(g);
 tabCtl  = uitab(tabs, 'Title', 'Control panel', 'BackgroundColor', col.bg);
 tabData = uitab(tabs, 'Title', 'Data Analysis', 'BackgroundColor', col.bg);
 tabPCA  = uitab(tabs, 'Title', 'PCA', 'BackgroundColor', col.bg);
+tabVas  = uitab(tabs, 'Title', 'Vasicek', 'BackgroundColor', col.bg);
 
 % --- Shared state ----------------------------------------------------------
 % settings: the choices applied from the Control panel (maturities, PCA periods...)
@@ -71,6 +76,7 @@ fig.WindowButtonMotionFcn = @(src, ~) cellfun(@(f) f(), src.UserData.onMove);
 
 buildDataAnalysisTab(fig, tabData, col, T, maturities, labels);
 buildPCATab(fig, tabPCA, col, T, maturities, labels);   % fixed maturities, as in Mele
+buildVasicekTab(fig, tabVas, col, T);                       % the 10 published maturities
 buildControlPanel(fig, tabCtl, col, curveLabels, T.Time(1), lastDay);
 tabs.SelectedTab = tabCtl;                                  % always open on the panel
 
@@ -81,14 +87,17 @@ function s = defaultSettings(labels, lastDay)
 % The settings the dashboard opens with
 s.maturities = labels;                                      % every maturity on
 s.A = struct('from', datetime(2004, 1, 1), 'to', lastDay, 'freq', 'Monthly');   % PCA period
+% Vasicek: sample start (from 2010 the 3M shows no mean reversion), frequency,
+% forecast horizon in months, anchoring of the forecast to today's curve
+s.V = struct('from', datetime(2000, 1, 1), 'freq', 'Monthly', 'h', 3, 'anchor', 'Decay');
 end
 
 
 % ==========================================================================
 function buildControlPanel(fig, tab, col, labels, firstDay, lastDay)
-% Control panel: the choices that apply to every section, in two cards
-% (maturities, PCA). Nothing changes until Apply is pressed; then Today,
-% History and PCA are redrawn.
+% Control panel: the choices that apply to every section, in three cards
+% (maturities, PCA, Vasicek). Nothing changes until Apply is pressed; then
+% Today, History, PCA and Vasicek are redrawn.
 
 s = fig.UserData.settings;
 
@@ -100,15 +109,15 @@ page.BackgroundColor = col.bg;
 
 buildHeader(page, col, 'Control panel', 'Choices applied to every section of the dashboard');
 
-cardsRow = uigridlayout(page, [1 2]);
-cardsRow.ColumnWidth     = {'3x', '2x'};
+cardsRow = uigridlayout(page, [1 3]);
+cardsRow.ColumnWidth     = {'5x', '3x', '3x'};
 cardsRow.ColumnSpacing   = 24;
 cardsRow.Padding         = [0 0 0 0];
 cardsRow.BackgroundColor = col.bg;
 
 % --- Card 1: maturities, in three groups along the curve -------------------
 body = card(cardsRow, 'Maturities', 'Shown on the curves of Today and History');
-body.RowHeight = {'1x', 34, 20};
+body.RowHeight = {'1x', 34, 34};
 groups = uigridlayout(body, [1 3]);
 groups.ColumnSpacing   = 24;
 groups.Padding         = [0 0 0 0];
@@ -147,7 +156,7 @@ presetButton(presets, 'Without bills', @() setBoxes(~ismember(labels, ["1M" "3M"
 presetButton(presets, 'Clear',        @() setBoxes(false(1, numel(labels))));
 uilabel(body, 'Text', ['The 15Y is not published by the Treasury: it is interpolated ' ...
         'between 10Y and 20Y. The 30Y is not used.'], ...
-        'FontName', col.font, 'FontSize', 12, 'FontColor', col.dim);
+        'FontName', col.font, 'FontSize', 12, 'FontColor', col.dim, 'WordWrap', 'on');
 
 % --- Card 2: PCA period and frequency ---------------------------------------
 body = card(cardsRow, 'PCA', 'Principal components of the yield levels (Mele, eq. 1)');
@@ -177,6 +186,40 @@ uilabel(body, 'Text', ['Maturities fixed as in Mele p. 91, without the 30Y: 1Y 2
         'FontName', col.font, 'FontSize', 12, 'FontColor', col.dim, 'WordWrap', 'on', ...
         'VerticalAlignment', 'bottom');
 
+% --- Card 3: Vasicek sample, frequency, forecast ----------------------------
+body = card(cardsRow, 'Vasicek', 'Short-rate model (Mele, eq. 7)');
+body.RowHeight = {'fit', '1x'};
+form = uigridlayout(body, [4 2]);              % formLabel writes into this form now
+form.ColumnWidth     = {100, '1x'};
+form.RowHeight       = {34, 34, 34, 34};
+form.RowSpacing      = 14;
+form.Padding         = [0 6 0 0];
+form.BackgroundColor = col.surface;
+formLabel('From');
+dpVFrom = uidatepicker(form, 'Value', s.V.from, 'Limits', [firstDay lastDay], ...
+                       'DisplayFormat', 'dd MMM yyyy', 'FontSize', 14, ...
+                       'BackgroundColor', col.bg, 'FontColor', col.text, 'FontName', col.font, ...
+                       'ValueChangedFcn', @(~, ~) changed());
+formLabel('Frequency');
+ddVFreq = uidropdown(form, 'Items', {'Daily', 'Monthly'}, 'Value', s.V.freq, ...
+                     'FontSize', 14, 'BackgroundColor', col.bg, 'FontColor', col.text, ...
+                     'FontName', col.font, 'ValueChangedFcn', @(~, ~) changed());
+formLabel('Horizon');
+efVH = uieditfield(form, 'numeric', 'Value', s.V.h, 'Limits', [1 120], ...
+                   'RoundFractionalValues', 'on', 'ValueDisplayFormat', '%d months', ...
+                   'FontSize', 14, 'BackgroundColor', col.bg, 'FontColor', col.text, ...
+                   'FontName', col.font, 'ValueChangedFcn', @(~, ~) changed());
+formLabel('Anchor');
+ddVAnchor = uidropdown(form, 'Items', {'Decay', 'Full', 'None'}, 'Value', s.V.anchor, ...
+                       'FontSize', 14, 'BackgroundColor', col.bg, 'FontColor', col.text, ...
+                       'FontName', col.font, 'ValueChangedFcn', @(~, ~) changed());
+ddVAnchor.Tooltip = ['How today''s fit error is carried into the forecast: Decay = it shrinks ' ...
+                     'at its estimated speed, Full = it stays, None = pure model forecast'];
+uilabel(body, 'Text', ['Sample from the chosen day to the last one. From 2010 the 3M shows ' ...
+        'no mean reversion and the model cannot be estimated.'], ...
+        'FontName', col.font, 'FontSize', 12, 'FontColor', col.dim, 'WordWrap', 'on', ...
+        'VerticalAlignment', 'bottom');
+
 % --- Apply, with one line on the state of the dashboard --------------------
 foot = uigridlayout(page, [1 2]);
 foot.ColumnWidth     = {'1x', 180};
@@ -194,15 +237,16 @@ setPending(false);
         p = uipanel(parent, 'BackgroundColor', col.surface, 'BorderType', 'line', ...
                     'BorderColor', col.line);
         grid = uigridlayout(p, [3 1]);
-        grid.RowHeight       = {30, 20, '1x'};
+        grid.RowHeight       = {30, 36, '1x'};          % subtitle: up to two lines
         grid.RowSpacing      = 4;
         grid.Padding         = [28 24 28 22];
         grid.BackgroundColor = col.surface;
         uilabel(grid, 'Text', title, 'FontName', col.font, 'FontSize', 22, ...
                 'FontWeight', 'bold', 'FontColor', col.text);
-        uilabel(grid, 'Text', subtitle, 'FontName', col.font, 'FontSize', 13, 'FontColor', col.muted);
+        uilabel(grid, 'Text', subtitle, 'FontName', col.font, 'FontSize', 13, 'FontColor', col.muted, ...
+                'WordWrap', 'on', 'VerticalAlignment', 'top');
         inner = uigridlayout(grid, [3 1]);
-        inner.Padding         = [0 0 0 22];          % [left bottom right top]: air under the subtitle
+        inner.Padding         = [0 0 0 10];          % [left bottom right top]: air under the subtitle
         inner.RowSpacing      = 14;
         inner.BackgroundColor = col.surface;
     end
@@ -249,6 +293,8 @@ setPending(false);
             msg = 'Choose at least one maturity.';
         elseif dpTo.Value <= dpFrom.Value
             msg = 'PCA: "To" must come after "From".';
+        elseif dpVFrom.Value > lastDay - calyears(2)
+            msg = 'Vasicek: start at least two years before the last day.';
         end
         if ~isempty(msg)
             lbState.FontColor = col.down;
@@ -258,6 +304,8 @@ setPending(false);
 
         new.maturities = sel;
         new.A = struct('from', dpFrom.Value, 'to', dpTo.Value, 'freq', ddFreq.Value);
+        new.V = struct('from', dpVFrom.Value, 'freq', ddVFreq.Value, 'h', efVH.Value, ...
+                       'anchor', ddVAnchor.Value);
         fig.UserData.settings = new;
 
         lbState.FontColor = col.muted;
@@ -1164,6 +1212,226 @@ else
 end
 info.last = t(end);
 info.n    = size(X, 1);
+end
+
+
+% ==========================================================================
+function buildVasicekTab(fig, tab, col, T)
+% Vasicek: the short-rate model dr = kappa (rbar - r) dt + sigma dW (Mele eq. 7)
+% estimated from the sample start and frequency chosen in the Control panel.
+% Four cards with the parameters, then two charts: the model curve against
+% the observed one on the last day, and the forecast h months ahead with a
+% +/- 1 s.d. band. Computed again whenever settings are applied.
+% Model code: yield_sample, vasicek_fit, vasicek_yields, vasicek_forecast.
+
+dot  = ['  ' char(183) '  '];
+note = ['Vasicek (Mele eq. 7). kappa, rbar, sigma from an AR(1) of the 3M yield (exact ' ...
+        'discretisation); lambda by least squares between model and observed yields over the ' ...
+        'whole sample; model yields Mele eq. 10. Forecast Mele p. 123, band +/- 1 s.d.; with the ' ...
+        'anchor, today''s fit error is kept (Full) or shrinks at its estimated speed (Decay). ' ...
+        'Maturities: the 10 published ones, 1M-20Y. Par yields treated as zero-coupon yields.'];
+
+% --- Page: header, status, four cards, two charts, note ---------------------
+page = uigridlayout(tab, [5 1]);
+page.RowHeight       = {56, 20, 92, '1x', 28};
+page.Padding         = [28 20 28 10];
+page.RowSpacing      = 14;
+page.BackgroundColor = col.bg;
+buildHeader(page, col, 'Yield Curve US  |  Vasicek', ['Short-rate model: fit to today''s ' ...
+            'curve and forecast' dot 'settings from the Control panel']);
+lbStatus = uilabel(page, 'Text', '', 'Interpreter', 'html', 'FontName', col.font, ...
+                   'FontSize', 12, 'FontColor', col.muted);
+
+cardNames = {'KAPPA  MEAN REVERSION', 'RBAR  LONG-RUN MEAN', 'SIGMA  VOLATILITY', ...
+             'LAMBDA  PRICE OF RISK'};
+cards = uigridlayout(page, [1 4]);
+cards.ColumnSpacing   = 14;
+cards.Padding         = [0 0 0 0];
+cards.BackgroundColor = col.bg;
+cardValue = gobjects(1, 4);  cardNote = gobjects(1, 4);
+for iCard = 1:4
+    p = uipanel(cards, 'BackgroundColor', col.surface, 'BorderType', 'line', ...
+                'BorderColor', col.line);
+    q = uigridlayout(p, [3 1]);
+    q.RowHeight       = {16, 34, 18};
+    q.RowSpacing      = 2;
+    q.Padding         = [16 10 16 8];
+    q.BackgroundColor = col.surface;
+    uilabel(q, 'Text', cardNames{iCard}, 'FontName', col.mono, 'FontSize', 10, 'FontColor', col.dim);
+    cardValue(iCard) = uilabel(q, 'Text', '', 'FontName', col.font, 'FontSize', 28, ...
+                               'FontWeight', 'bold', 'FontColor', col.text);
+    cardNote(iCard)  = uilabel(q, 'Text', '', 'FontName', col.font, 'FontSize', 12, ...
+                               'FontColor', col.muted);
+end
+charts = uigridlayout(page, [1 2]);
+charts.ColumnSpacing   = 28;
+charts.Padding         = [0 0 0 0];
+charts.BackgroundColor = col.bg;
+uilabel(page, 'Text', note, 'FontName', col.font, 'FontSize', 10, 'FontColor', col.dim, ...
+        'WordWrap', 'on');
+
+% Colours: observed curve, model curve, forecast, pure model forecast
+c.obs   = col.text2;
+c.model = col.accent;
+c.fcst  = col.trailNew;
+c.pure  = col.trailOld;
+
+% --- Behaviour ------------------------------------------------------------
+hovers = {};
+fig.UserData.onMove{end+1}  = @onMove;
+fig.UserData.onApply{end+1} = @run;          % new settings from the Control panel
+drawnow;
+run();
+
+    function run()
+        s = fig.UserData.settings.V;
+        delete(charts.Children);
+        hovers = {};
+        set(cardValue, 'Text', char(8211));  set(cardNote, 'Text', '');
+
+        % Data and estimation; a sample without mean reversion stops here
+        data = yield_sample(T, s.from, lower(s.freq));
+        lbStatus.Text = sprintf('<b>1M %s 20Y</b>%s%s %s %s%s%s%s%d observations%sforecast %d months, anchor %s', ...
+                                char(8211), dot, char(data.dates(1), 'dd MMM yyyy'), char(8211), ...
+                                char(data.dates(end), 'dd MMM yyyy'), dot, lower(s.freq), dot, ...
+                                numel(data.r), dot, s.h, lower(s.anchor));
+        try
+            params = vasicek_fit(data);
+        catch err
+            uilabel(charts, 'Text', err.message, 'FontName', col.font, 'FontSize', 15, ...
+                    'FontColor', col.down, 'HorizontalAlignment', 'center', 'WordWrap', 'on');
+            return
+        end
+        fillCards(params);
+
+        % Today: observed and model curve; forecast h months ahead
+        r0     = data.r(end);
+        Yobs   = data.Y(end, :);
+        Rmodel = vasicek_yields(params, r0, data.tau);
+        [mu, sd, muModel] = vasicek_forecast(params, r0, data.tau, s.h / 12, ...
+                                             anchor=lower(s.anchor), Yobs=Yobs);
+        day = char(data.dates(end), 'dd MMM yyyy');
+        drawFit(data.tau, data.labels, 100*Yobs, 100*Rmodel, day);
+        drawForecast(data.tau, data.labels, 100*Yobs, 100*mu, 100*sd, 100*muModel, s, day);
+    end
+
+    function fillCards(par)
+        % Each parameter with its standard error
+        cardValue(1).Text = sprintf('%.3f', par.kappa);
+        cardNote(1).Text  = sprintf('s.e. %.3f%shalf-life %.1f years', par.se.kappa, dot, par.halflife);
+        cardValue(2).Text = sprintf('%.2f%%', 100*par.rbar);
+        cardNote(2).Text  = sprintf('s.e. %.2f%%', 100*par.se.rbar);
+        cardValue(3).Text = sprintf('%.2f%%', 100*par.sigma);
+        cardNote(3).Text  = sprintf('s.e. %.2f%%%sper year', 100*par.se.sigma, dot);
+        cardValue(4).Text = sprintf('%.3f', par.lambda);
+        cardNote(4).Text  = 'least squares on yields';
+    end
+
+    function drawFit(x, names, Yobs, Rmodel, day)
+        % Observed and model curve on the last day, against maturity in years
+        ax = chartWithTitle(sprintf(['<b>Fit on %s</b>&nbsp;&nbsp;&nbsp; %s observed&nbsp; ' ...
+                                     '%s Vasicek'], day, key(c.obs), key(c.model)));
+        hold(ax, 'on');
+        plot(ax, x, Yobs, '-', 'Color', c.obs, 'LineWidth', 1.2, 'Marker', 'o', ...
+             'MarkerSize', 5, 'MarkerFaceColor', c.obs);
+        plot(ax, x, Rmodel, '-', 'Color', c.model, 'LineWidth', 2, 'Marker', 'o', ...
+             'MarkerSize', 5, 'MarkerFaceColor', c.model);
+        addHover(ax, x, names, [Yobs; Rmodel], {'observed', 'Vasicek'});
+        hold(ax, 'off');
+        styleMaturityAxes(ax, [Yobs Rmodel]);
+    end
+
+    function drawForecast(x, names, Yobs, mu, sd, muModel, s, day)
+        % Forecast mean with its +/- 1 s.d. band; the pure model forecast dashed
+        % when the forecast is anchored; today's observed curve for reference
+        anchored = s.anchor ~= "None";
+        titleHtml = sprintf('<b>Forecast in %d months</b>&nbsp;&nbsp;&nbsp; %s mean %s 1 s.d.', ...
+                            s.h, key(c.fcst), char(177));
+        if anchored
+            titleHtml = [titleHtml sprintf('&nbsp; %s pure model', key(c.pure))];
+        end
+        titleHtml = [titleHtml sprintf('&nbsp; %s observed %s', key(c.obs), day)];
+        ax = chartWithTitle(titleHtml);
+        hold(ax, 'on');
+        fill(ax, [x, fliplr(x)], [mu + sd, fliplr(mu - sd)], blend(col.bg, c.fcst, 0.22), ...
+             'EdgeColor', 'none');
+        plot(ax, x, Yobs, '-', 'Color', c.obs, 'LineWidth', 1, 'Marker', 'o', ...
+             'MarkerSize', 4, 'MarkerFaceColor', c.obs);
+        rows = [Yobs; mu; mu - sd; mu + sd];
+        rowNames = {'observed', 'forecast', '- 1 s.d.', '+ 1 s.d.'};
+        if anchored
+            plot(ax, x, muModel, '--', 'Color', c.pure, 'LineWidth', 1.4);
+            rows = [rows; muModel];
+            rowNames{end+1} = 'pure model';
+        end
+        plot(ax, x, mu, '-', 'Color', c.fcst, 'LineWidth', 2, 'Marker', 'o', ...
+             'MarkerSize', 5, 'MarkerFaceColor', c.fcst);
+        addHover(ax, x, names, rows, rowNames);
+        hold(ax, 'off');
+        styleMaturityAxes(ax, [Yobs mu - sd mu + sd muModel]);
+    end
+
+    function ax = chartWithTitle(titleHtml)
+        % Title line (with its own colour key) above a chart
+        g = uigridlayout(charts, [2 1]);
+        g.RowHeight       = {22, '1x'};
+        g.RowSpacing      = 4;
+        g.Padding         = [0 0 0 0];
+        g.BackgroundColor = col.bg;
+        uilabel(g, 'Text', titleHtml, 'Interpreter', 'html', 'FontName', col.font, ...
+                'FontSize', 12, 'FontColor', col.text2);
+        ax = makeAxes(g, col);
+    end
+
+    function s = key(rgb)
+        % A short coloured dash for the title lines
+        s = sprintf('<b style="color:%s">&#9644;</b>', cssColour(rgb));
+    end
+
+    function styleMaturityAxes(ax, values)
+        % Maturity axis 0-20 years, a tick every 5; yields in % with some margin
+        lo  = min(values, [], 'all');  hi = max(values, [], 'all');
+        pad = max(0.08*(hi - lo), 0.05);
+        tk  = 0:5:20;
+        styleAxes(ax, col, [-0.3 20.5], [lo - pad, hi + pad], tk, ...
+                  arrayfun(@(v) sprintf('%dY', v), tk, 'UniformOutput', false));
+        xlabel(ax, 'Maturity (years)', 'Color', col.muted, 'FontName', col.font, 'FontSize', 12);
+    end
+
+    function addHover(ax, x, names, rows, rowNames)
+        % Guide line and value box at the maturity nearest to the mouse (hidden at start)
+        h.ax = ax;  h.x = x;  h.names = names;  h.rows = rows;  h.rowNames = rowNames;
+        h.guide = plot(ax, NaN, NaN, '-', 'Color', blend(col.bg, col.text, 0.25), 'LineWidth', 1);
+        h.box   = text(ax, NaN, NaN, '', 'Color', col.text, 'BackgroundColor', col.surface, ...
+                       'EdgeColor', col.line, 'Margin', 7, 'FontName', col.mono, 'FontSize', 11, ...
+                       'VerticalAlignment', 'top', 'Interpreter', 'none', 'Visible', 'off');
+        hovers{end+1} = h;
+    end
+
+    function onMove()
+        % Hover: every curve's value at the nearest maturity
+        if tab.Parent.SelectedTab ~= tab, return, end
+        for i = 1:numel(hovers)
+            h = hovers{i};
+            if ~isvalid(h.ax), continue, end
+            cp = h.ax.CurrentPoint;
+            xl = xlim(h.ax);  yl = ylim(h.ax);
+            if cp(1,1) < xl(1) || cp(1,1) > xl(2) || cp(1,2) < yl(1) || cp(1,2) > yl(2)
+                set(h.guide, 'XData', NaN, 'YData', NaN);
+                h.box.Visible = 'off';
+                continue
+            end
+            [~, j] = min(abs(h.x - cp(1,1)));
+            set(h.guide, 'XData', [h.x(j) h.x(j)], 'YData', yl);
+            lines = [{char(h.names(j))}, ...
+                     cellfun(@(nm, v) sprintf('%-10s %5.2f%%', nm, v), h.rowNames, ...
+                             num2cell(h.rows(:, j)'), 'UniformOutput', false)];
+            align = 'left';
+            if (h.x(j) - xl(1)) / diff(xl) > 0.6, align = 'right'; end
+            set(h.box, 'Position', [h.x(j), yl(2) - 0.03*diff(yl), 0], ...
+                'HorizontalAlignment', align, 'String', lines, 'Visible', 'on');
+        end
+    end
 end
 
 
