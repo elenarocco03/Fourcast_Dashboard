@@ -85,8 +85,8 @@ Commits: 714beae, 73279a8, b1d6400, b7069bd, 4fc88ef
 
 ---
 
-## 2026-11-16 | Matteo | PCA engine, PCA section and Control panel
-Commits: 7ae9751
+## 2026-11-16 | Matteo | PCA engine, PCA section, Control panel, Vasicek lambda fit
+Commits: 7ae9751, and the Vasicek lambda fit commit
 
 **Done**
 - `pca_curva.m`: PCA engine (eigenvectors of the covariance, variance shares, scores).
@@ -101,15 +101,43 @@ Commits: 7ae9751
 **Decisions and reasons**
 | Decision | Alternative | Reason |
 |---|---|---|
-| Dashboard PCA on levels (Mele eq. 1) | Changes, as in Tutorial 4 | [TODO: ask Matteo] |
-| Maturities 1Y-20Y, as Mele p. 91 | All published maturities | Comparability with Mele p. 91; [TODO: ask Matteo] why the interpolated 15Y is kept |
-| Default PCA sample from 2004, monthly | Other start | [TODO: ask Matteo] |
+| Dashboard PCA on levels (Mele eq. 1) | Changes, as in Tutorial 4 | The teacher's chart of the factors over time matches a PCA on levels (shares 88.4 / 10.6 / 0.8% on the teacher's chart; `pca_campione.m`, levels 2001-2026 with the 30Y: 88.3 / 10.4 / 1.0%; daily changes: 68.3 / 16.2 / 7.8%), and Mele eq. 1 is written on levels. The PCA on changes stays in `pca_campione.m` |
+| Maturities 1Y-20Y with the 15Y, as Mele p. 91 | All published maturities, no 15Y | Comparability with Mele p. 91: same maturity grid as his figure, without the 30Y (author's choice). The 15Y is (10Y + 20Y)/2, so it adds no information of its own (one eigenvalue is zero) and slightly raises the weight of the long end |
+| Default PCA sample from 2004, monthly | Other start | Author's choice, not substantive: period and frequency can be changed in the Control panel |
 
 **Results** (dashboard default, monthly levels, 01 Jan 2004 - 12 Nov 2026, 275 obs.)
 - Variance shares: level 91.8%, slope 7.7%, curvature 0.4% (first three 99.9%).
 
+**Vasicek lambda fit (dashboard section "Vasicek λ fit", teacher's exercise)**
+- kappa, rbar, sigma typed on the page (default Mele p. 122: 0.20, 6%, 3%); r = today's 3M;
+  lambda fitted by least squares on today's market curve at the maturities of the Control
+  panel; market curve and Vasicek curve on one chart; cards: lambda fitted (with r_inf),
+  short rate, fit error (RMSE). Continuous-time yields from `vasicek_yields.m`.
+- Kept separate from the Vasicek section (estimation and forecast): here the parameters are
+  chosen by hand and only lambda is fitted, on one day.
+
+| Decision | Alternative | Reason |
+|---|---|---|
+| lambda in closed form, OLS through the origin | Numerical search | The model yield is linear in lambda: R = R0 + lambda g, g = -(1 - B/tau) sigma/kappa; same solution, no tuning |
+| r = today's 3M, not an input | r typed by hand | Teacher's exercise: the short rate is observed; only kappa, rbar, sigma are chosen |
+| 15Y excluded from the fit, shown on the market curve | Fit on all the Today maturities | The 15Y is interpolated, not market data |
+| Continuous-time yields | Discrete recursion (board 7719) | Already validated on the slides; the discrete version is the next step, to be compared on the same chart |
+
+**Results** (curve of 12 Nov 2026, all ten published maturities, from the dashboard)
+- kappa 0.20, rbar 6%, sigma 3%: lambda = -0.045, r_inf = 5.55%, RMSE 12 bp (largest +22 bp
+  at 1M: the model starts from the 3M and cannot go below it).
+- kappa 0.60, same rbar and sigma: lambda = +0.104, r_inf = 5.35%, RMSE 12 bp.
+
+**Limitations**
+- One day, in sample: the fit error describes today's curve, it is not a forecast error.
+- One factor: the model curve passes through the market curve but cannot follow its humps.
+
 **Open points**
 - The PCA does not use the shared input `yield_sample` yet (`MODELS_PLAN.md`).
+- Discrete-time model (board 7719): implement with `yield_sample` and the sample from 2000,
+  then compare with the continuous curve on the lambda fit chart.
+- Teacher's request of a fit error week by week and its average: whether lambda is one for
+  all weeks (board 7720 sums over t) or re-estimated each week is to be confirmed.
 
 ---
 

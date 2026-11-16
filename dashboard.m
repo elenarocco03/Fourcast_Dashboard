@@ -17,6 +17,9 @@ function dashboard
 %     frequency of the Control panel (vasicek_fit.m); parameters, model vs
 %     observed curve today, and the forecast h months ahead with a +/- 1 s.d.
 %     band (vasicek_forecast.m). Maturities: the 10 published ones, 1M ... 20Y.
+%   Section 4: Vasicek lambda fit - kappa, rbar, sigma typed on the page,
+%     r = today's 3M, lambda fitted by least squares on today's market curve;
+%     market and Vasicek curves compared (the teacher's exercise).
 %   Style: deep navy background, soft blue accent.
 %   Setup: see README.txt (each user needs a free FRED API key).
 
@@ -61,6 +64,7 @@ tabCtl  = uitab(tabs, 'Title', 'Control panel', 'BackgroundColor', col.bg);
 tabData = uitab(tabs, 'Title', 'Data Analysis', 'BackgroundColor', col.bg);
 tabPCA  = uitab(tabs, 'Title', 'PCA', 'BackgroundColor', col.bg);
 tabVas  = uitab(tabs, 'Title', 'Vasicek', 'BackgroundColor', col.bg);
+tabLam  = uitab(tabs, 'Title', ['Vasicek ' char(955) ' fit'], 'BackgroundColor', col.bg);
 
 % --- Shared state ----------------------------------------------------------
 % settings: the choices applied from the Control panel (maturities, PCA periods...)
@@ -77,6 +81,7 @@ fig.WindowButtonMotionFcn = @(src, ~) cellfun(@(f) f(), src.UserData.onMove);
 buildDataAnalysisTab(fig, tabData, col, T, maturities, labels);
 buildPCATab(fig, tabPCA, col, T, maturities, labels);   % fixed maturities, as in Mele
 buildVasicekTab(fig, tabVas, col, T);                       % the 10 published maturities
+buildLambdaFitTab(fig, tabLam, col, T, maturities, labels);  % lambda fitted to today's curve
 buildControlPanel(fig, tabCtl, col, curveLabels, T.Time(1), lastDay);
 tabs.SelectedTab = tabCtl;                                  % always open on the panel
 
@@ -1434,6 +1439,165 @@ run();
     end
 end
 
+
+% ==========================================================================
+function buildLambdaFitTab(fig, tab, col, T, maturities, labels)
+% Vasicek lambda fit: today's market curve and the Vasicek curve fitted to it.
+% Not an estimation of the model (that is the Vasicek section): the parameters
+% are chosen by hand and only lambda is fitted, as asked by the teacher.
+%   kappa, rbar, sigma   typed on this page (default: Mele p. 122)
+%   r                    today's short rate, the 3M (not an input)
+%   lambda               estimated by least squares on today's curve, at the
+%                        maturities chosen in the Control panel (15Y excluded:
+%                        it is interpolated, not market data)
+% Model yields in continuous time: vasicek_yields.m (Mele eq. 10, p. 121-122).
+
+dot = ['  ' char(183) '  '];
+[T, maturities, labels] = prepareCurve(T, maturities, labels);   % as in Today: no 30Y, 15Y added
+complete = find(all(~isnan(T.Variables), 2));
+asOf     = T.Time(complete(end));
+today    = T{complete(end), :} / 100;                % today's curve, decimals
+r        = today(labels == "3M");                    % short rate: today's 3M
+slide    = struct('kappa', 0.2, 'rbar', 0.06, 'sigma', 0.03);   % Mele p. 122
+colMarket = col.accent;                              % the curve of Today
+colModel  = hex('D99A2B');                           % the Vasicek curve
+
+page = uigridlayout(tab, [5 1]);
+page.RowHeight       = {56, 40, 92, '1x', 28};
+page.Padding         = [28 20 28 10];
+page.RowSpacing      = 16;
+page.BackgroundColor = col.bg;
+
+buildHeader(page, col, ['Yield Curve US  |  Vasicek ' char(955) ' fit'], ['Today''s market curve and the Vasicek ' ...
+            'curve fitted to it' dot 'as of ' char(asOf, 'dd MMM yyyy')]);
+
+% --- Inputs: kappa, rbar, sigma ----------------------------------------------
+inputs = uigridlayout(page, [1 8]);
+inputs.ColumnWidth     = {50, 110, 50, 110, 56, 110, 130, '1x'};
+inputs.ColumnSpacing   = 10;
+inputs.Padding         = [0 0 0 0];
+inputs.BackgroundColor = col.bg;
+efKappa = numberField('kappa', slide.kappa,     [1e-3 10], '%.2f');
+efRbar  = numberField('rbar',  100*slide.rbar,  [-5 30],   '%.2f%%');
+efSigma = numberField('sigma', 100*slide.sigma, [1e-3 30], '%.2f%%');
+uibutton(inputs, 'Text', 'Slide values', 'FontName', col.font, 'FontSize', 13, ...
+         'BackgroundColor', col.surface, 'FontColor', col.text2, ...
+         'Tooltip', 'kappa 0.20, rbar 6%, sigma 3% (Mele p. 122)', ...
+         'ButtonPushedFcn', @(~, ~) slideValues());
+
+% --- Cards: lambda fitted, short rate, fit error -----------------------------
+cardNames = {'LAMBDA FITTED', 'SHORT RATE TODAY', 'FIT ERROR'};
+cards = uigridlayout(page, [1 4]);
+cards.ColumnSpacing   = 14;
+cards.Padding         = [0 0 0 0];
+cards.BackgroundColor = col.bg;
+cardValue = gobjects(1, 3);  cardNote = gobjects(1, 3);
+for iCard = 1:3
+    p = uipanel(cards, 'BackgroundColor', col.surface, 'BorderType', 'line', 'BorderColor', col.line);
+    q = uigridlayout(p, [3 1]);
+    q.RowHeight       = {16, 34, 18};
+    q.RowSpacing      = 2;
+    q.Padding         = [16 10 16 8];
+    q.BackgroundColor = col.surface;
+    uilabel(q, 'Text', cardNames{iCard}, 'FontName', col.mono, 'FontSize', 10, 'FontColor', col.dim);
+    cardValue(iCard) = uilabel(q, 'Text', '', 'FontName', col.font, 'FontSize', 28, ...
+                               'FontWeight', 'bold', 'FontColor', col.text);
+    cardNote(iCard)  = uilabel(q, 'Text', '', 'FontName', col.font, 'FontSize', 12, ...
+                               'FontColor', col.muted);
+end
+
+% --- Chart: market curve and Vasicek curve -----------------------------------
+holder = uigridlayout(page, [2 1]);
+holder.RowHeight       = {22, '1x'};
+holder.RowSpacing      = 4;
+holder.Padding         = [0 0 0 0];
+holder.BackgroundColor = col.bg;
+uilabel(holder, 'Interpreter', 'html', 'FontName', col.font, 'FontSize', 12, ...
+        'FontColor', col.text2, 'Text', sprintf(['<b>Market vs Vasicek</b>&nbsp;&nbsp; ' ...
+        '<b style="color:%s">&#9644;</b> market, today&nbsp; ' ...
+        '<b style="color:%s">&#9644;</b> Vasicek, lambda fitted'], ...
+        cssColour(colMarket), cssColour(colModel)));
+ax = makeAxes(holder, col);
+
+uilabel(page, 'FontName', col.font, 'FontSize', 10, 'FontColor', col.dim, 'WordWrap', 'on', ...
+    'Text', ['Vasicek, continuous time (Mele p. 121-122): R(tau) = -A/tau + (B/tau) r, ' ...
+             'B = (1 - exp(-kappa tau))/kappa, A = (B - tau) r_inf - sigma^2 B^2/(4 kappa), ' ...
+             'r_inf = rbar - lambda sigma/kappa - (sigma/kappa)^2/2. lambda: least squares on ' ...
+             'today''s yields at the maturities of the Control panel (15Y excluded). ' ...
+             'FRED par yields treated as zero-coupon yields.']);
+
+fig.UserData.onApply{end+1} = @redraw;      % new maturities from the Control panel
+drawnow;
+redraw();
+
+    function ef = numberField(name, value, limits, fmt)
+        smallLabel(inputs, col, name);
+        ef = uieditfield(inputs, 'numeric', 'Value', value, 'Limits', limits, ...
+                         'ValueDisplayFormat', fmt, 'FontSize', 14, 'FontName', col.font, ...
+                         'BackgroundColor', col.surface, 'FontColor', col.text, ...
+                         'HorizontalAlignment', 'right', 'ValueChangedFcn', @(~, ~) redraw());
+    end
+
+    function slideValues()
+        efKappa.Value = slide.kappa;  efRbar.Value = 100*slide.rbar;  efSigma.Value = 100*slide.sigma;
+        redraw();
+    end
+
+    function redraw()
+        % Fit lambda on today's curve and draw both curves
+        sel  = ismember(labels, fig.UserData.settings.maturities);
+        fit_ = sel & labels ~= "15Y";                 % market data only
+        x    = maturities(sel);   y = today(sel);
+        cla(ax);
+        if ~any(fit_)
+            set(cardValue, 'Text', char(8211));  set(cardNote, 'Text', '');
+            text(ax, 0.5, 0.5, 'Choose at least one maturity in the Control panel', ...
+                 'Units', 'normalized', 'Color', col.muted, 'HorizontalAlignment', 'center', ...
+                 'FontName', col.font, 'FontSize', 14);
+            styleAxes(ax, col, [0 1], [0 1], [], {});
+            return
+        end
+
+        p = struct('kappa', efKappa.Value, 'rbar', efRbar.Value/100, 'sigma', efSigma.Value/100);
+        p.lambda = fitLambda(p, r, maturities(fit_), today(fit_));
+        rinf = p.rbar - p.lambda * p.sigma / p.kappa - 0.5 * (p.sigma / p.kappa)^2;   % Mele p. 121
+        err  = vasicek_yields(p, r, maturities(fit_)) - today(fit_);
+        names = labels(fit_);
+        [~, worst] = max(abs(err));
+
+        cardValue(1).Text = sprintf('%.3f', p.lambda);
+        cardNote(1).Text  = sprintf('asymptotic yield r_inf %.2f%%', 100*rinf);
+        cardValue(2).Text = sprintf('%.2f%%', 100*r);
+        cardNote(2).Text  = sprintf('3M yield on %s', char(asOf, 'dd MMM yyyy'));
+        cardValue(3).Text = sprintf('%.0f bp', 1e4*sqrt(mean(err.^2)));
+        cardNote(3).Text  = sprintf('root mean square; largest %+.0f bp at %s', 1e4*err(worst), names(worst));
+
+        % Curves: market as in Today (smooth line through the chosen maturities),
+        % Vasicek on a fine grid over the same range
+        xm = linspace(min(x), max(x), 300);
+        ym = vasicek_yields(p, r, xm);
+        [xr, yr] = fitRange([x xm], 100*[y ym]);
+        hold(ax, 'on');
+        plot(ax, smoothX(x), 100*smoothY(x, y), '-', 'Color', colMarket, 'LineWidth', 2.2);
+        plot(ax, xm, 100*ym, '-', 'Color', colModel, 'LineWidth', 2.2);
+        hold(ax, 'off');
+        [tk, tl] = maturityTicks(xr, x, labels(sel));
+        styleAxes(ax, col, xr, yr, tk, tl);
+    end
+end
+
+function lambda = fitLambda(p, r, tau, y)
+% Least squares lambda on one market curve y (decimals), kappa rbar sigma fixed.
+% The model yield is linear in lambda: R = R0 + lambda * g, with R0 the yield at
+% lambda = 0 and g = dR/dlambda = -(1 - B/tau) sigma/kappa (Mele p. 121), so
+% the minimum of sum (R - y)^2 is an OLS slope through the origin:
+% lambda = sum(g (y - R0)) / sum(g^2).
+p.lambda = 0;
+R0 = vasicek_yields(p, r, tau);
+B  = (1 - exp(-p.kappa * tau)) / p.kappa;
+g  = -(1 - B ./ tau) * p.sigma / p.kappa;
+lambda = sum(g .* (y - R0)) / sum(g.^2);
+end
 
 % ==========================================================================
 % Shared building blocks
