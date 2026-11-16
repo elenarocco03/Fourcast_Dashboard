@@ -27,7 +27,7 @@ tau    = [1/12 3/12 6/12 1 2 3 5 7 10 20];
 labels = ["1M" "3M" "6M" "1Y" "2Y" "3Y" "5Y" "7Y" "10Y" "20Y"];
 
 % 1. Sample period and maturities; keep only days with all 10 yields
-T = T(T.Time >= from, series);
+T = T(T.Properties.RowTimes >= from, series);
 T = rmmissing(T);
 
 % 2. Frequency
@@ -36,7 +36,7 @@ switch lower(string(freq))
         dt = 1/252;
     case "monthly"
         % last available day of each month (keeps the true date)
-        month = dateshift(T.Time, 'start', 'month');
+        month = dateshift(T.Properties.RowTimes, 'start', 'month');
         [~, last] = unique(month, 'last');
         T  = T(last, :);
         dt = 1/12;
@@ -45,7 +45,7 @@ switch lower(string(freq))
 end
 
 % 3. Output, in decimals
-data.dates  = T.Time;
+data.dates  = T.Properties.RowTimes;
 data.tau    = tau;
 data.labels = labels;
 data.Y      = T.Variables / 100;
