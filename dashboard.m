@@ -1,5 +1,7 @@
 function dashboard
 % DASHBOARD  Fourcast - yield curve analytics, one tab per section.
+%   Control panel (opens first): maturities and PCA settings for the whole
+%     dashboard; Apply redraws every section with them.
 %   Section 1: Data Analysis, with two sub-tabs:
 %     Today    today's U.S. Treasury yield curve and its key numbers
 %     History  the curve moving through time over a chosen period
@@ -7,6 +9,10 @@ function dashboard
 %   date every time the dashboard opens (fred_yield_history.m).
 %   Maturities shown: 1M ... 20Y. The 30Y is left out; the 15Y is not
 %   published by the Treasury and is interpolated between 10Y and 20Y.
+%   Section 2: PCA - principal components of the yield levels (level, slope,
+%     curvature) over the period and frequency of the Control panel; engine
+%     in pca_curva.m. Maturities fixed as in Mele p. 91 without the 30Y
+%     (1Y ... 20Y, 15Y interpolated). Two views: Loadings and Factors.
 %   Style: deep navy background, soft blue accent.
 %   Setup: see README.txt (each user needs a free FRED API key).
 
@@ -47,10 +53,219 @@ g.Padding = [0 0 0 0];
 
 % --- Sections: one tab each -----------------------------------------------
 tabs    = uitabgroup(g);
+tabCtl  = uitab(tabs, 'Title', 'Control panel', 'BackgroundColor', col.bg);
 tabData = uitab(tabs, 'Title', 'Data Analysis', 'BackgroundColor', col.bg);
+tabPCA  = uitab(tabs, 'Title', 'PCA', 'BackgroundColor', col.bg);
+
+% --- Shared state ----------------------------------------------------------
+% settings: the choices applied from the Control panel (maturities, PCA periods...)
+% onApply:  what every section does when new settings are applied
+% onMove:   mouse moves, sent to every chart (each reacts only when visible)
+[~, ~, curveLabels] = prepareCurve(T, maturities, labels);
+complete = all(~isnan(T{:, labels ~= "30Y"}), 2);
+lastDay  = T.Time(find(complete, 1, 'last'));
+fig.UserData.settings = defaultSettings(curveLabels, lastDay);
+fig.UserData.onApply  = {};
+fig.UserData.onMove   = {};
+fig.WindowButtonMotionFcn = @(src, ~) cellfun(@(f) f(), src.UserData.onMove);
 
 buildDataAnalysisTab(fig, tabData, col, T, maturities, labels);
+buildPCATab(fig, tabPCA, col, T, maturities, labels);   % fixed maturities, as in Mele
+buildControlPanel(fig, tabCtl, col, curveLabels, T.Time(1), lastDay);
+tabs.SelectedTab = tabCtl;                                  % always open on the panel
 
+end
+
+
+function s = defaultSettings(labels, lastDay)
+% The settings the dashboard opens with
+s.maturities = labels;                                      % every maturity on
+s.A = struct('from', datetime(2004, 1, 1), 'to', lastDay, 'freq', 'Monthly');   % PCA period
+end
+
+
+% ==========================================================================
+function buildControlPanel(fig, tab, col, labels, firstDay, lastDay)
+% Control panel: the choices that apply to every section, in two cards
+% (maturities, PCA). Nothing changes until Apply is pressed; then Today,
+% History and PCA are redrawn.
+
+s = fig.UserData.settings;
+
+page = uigridlayout(tab, [4 1]);
+page.RowHeight       = {56, 400, 52, '1x'};
+page.Padding         = [28 20 28 10];
+page.RowSpacing      = 24;
+page.BackgroundColor = col.bg;
+
+buildHeader(page, col, 'Control panel', 'Choices applied to every section of the dashboard');
+
+cardsRow = uigridlayout(page, [1 2]);
+cardsRow.ColumnWidth     = {'3x', '2x'};
+cardsRow.ColumnSpacing   = 24;
+cardsRow.Padding         = [0 0 0 0];
+cardsRow.BackgroundColor = col.bg;
+
+% --- Card 1: maturities, in three groups along the curve -------------------
+body = card(cardsRow, 'Maturities', 'Shown on the curves of Today and History');
+body.RowHeight = {'1x', 34, 20};
+groups = uigridlayout(body, [1 3]);
+groups.ColumnSpacing   = 24;
+groups.Padding         = [0 0 0 0];
+groups.BackgroundColor = col.surface;
+segment = {'SHORT END', ["1M" "3M" "6M" "1Y"];
+           'BELLY',     ["2Y" "3Y" "5Y" "7Y"];
+           'LONG END',  ["10Y" "15Y" "20Y"]};
+box = gobjects(1, numel(labels));
+for iSeg = 1:size(segment, 1)
+    names  = segment{iSeg, 2};
+    column = uigridlayout(groups, [5 1]);
+    column.RowHeight       = {22, 30, 30, 30, 30};
+    column.RowSpacing      = 6;
+    column.Padding         = [0 0 0 0];
+    column.BackgroundColor = col.surface;
+    uilabel(column, 'Text', segment{iSeg, 1}, 'FontName', col.mono, 'FontSize', 11, ...
+            'FontColor', col.dim);
+    for name = names
+        k = find(labels == name);
+        caption = char(name);
+        if name == "15Y", caption = '15Y  (interpolated)'; end
+        box(k) = uicheckbox(column, 'Text', caption, 'Value', ismember(name, s.maturities), ...
+                            'FontName', col.font, 'FontSize', 15, 'FontColor', col.text, ...
+                            'ValueChangedFcn', @(~, ~) changed());
+    end
+end
+box(labels == "15Y").Tooltip = 'Not published by the Treasury: interpolated between 10Y and 20Y';
+
+presets = uigridlayout(body, [1 4]);
+presets.ColumnWidth     = {110, 130, 90, '1x'};
+presets.ColumnSpacing   = 10;
+presets.Padding         = [0 0 0 0];
+presets.BackgroundColor = col.surface;
+presetButton(presets, 'Select all',   @() setBoxes(true(1, numel(labels))));
+presetButton(presets, 'Without bills', @() setBoxes(~ismember(labels, ["1M" "3M" "6M"])));
+presetButton(presets, 'Clear',        @() setBoxes(false(1, numel(labels))));
+uilabel(body, 'Text', ['The 15Y is not published by the Treasury: it is interpolated ' ...
+        'between 10Y and 20Y. The 30Y is not used.'], ...
+        'FontName', col.font, 'FontSize', 12, 'FontColor', col.dim);
+
+% --- Card 2: PCA period and frequency ---------------------------------------
+body = card(cardsRow, 'PCA', 'Principal components of the yield levels (Mele, eq. 1)');
+body.RowHeight = {'fit', '1x'};
+form = uigridlayout(body, [3 2]);
+form.ColumnWidth     = {100, '1x'};
+form.RowHeight       = {34, 34, 34};
+form.RowSpacing      = 14;
+form.Padding         = [0 6 0 0];
+form.BackgroundColor = col.surface;
+formLabel('From');
+dpFrom = uidatepicker(form, 'Value', s.A.from, 'Limits', [firstDay lastDay], ...
+                      'DisplayFormat', 'dd MMM yyyy', 'FontSize', 14, ...
+                      'BackgroundColor', col.bg, 'FontColor', col.text, 'FontName', col.font, ...
+                      'ValueChangedFcn', @(~, ~) changed());
+formLabel('To');
+dpTo = uidatepicker(form, 'Value', s.A.to, 'Limits', [firstDay lastDay], ...
+                    'DisplayFormat', 'dd MMM yyyy', 'FontSize', 14, ...
+                    'BackgroundColor', col.bg, 'FontColor', col.text, 'FontName', col.font, ...
+                    'ValueChangedFcn', @(~, ~) changed());
+formLabel('Frequency');
+ddFreq = uidropdown(form, 'Items', {'Daily', 'Weekly', 'Monthly'}, 'Value', s.A.freq, ...
+                    'FontSize', 14, 'BackgroundColor', col.bg, 'FontColor', col.text, ...
+                    'FontName', col.font, 'ValueChangedFcn', @(~, ~) changed());
+uilabel(body, 'Text', ['Maturities fixed as in Mele p. 91, without the 30Y: 1Y 2Y 3Y 5Y ' ...
+        '7Y 10Y 15Y 20Y (the 15Y interpolated). Used by both views, Loadings and Factors.'], ...
+        'FontName', col.font, 'FontSize', 12, 'FontColor', col.dim, 'WordWrap', 'on', ...
+        'VerticalAlignment', 'bottom');
+
+% --- Apply, with one line on the state of the dashboard --------------------
+foot = uigridlayout(page, [1 2]);
+foot.ColumnWidth     = {'1x', 180};
+foot.ColumnSpacing   = 18;
+foot.Padding         = [0 0 0 0];
+foot.BackgroundColor = col.bg;
+lbState = uilabel(foot, 'Text', '', 'FontName', col.font, 'FontSize', 13, ...
+                  'HorizontalAlignment', 'right');
+btnApply = uibutton(foot, 'Text', 'Apply', 'FontName', col.font, 'FontSize', 15, ...
+                    'FontWeight', 'bold', 'ButtonPushedFcn', @(~, ~) apply());
+setPending(false);
+
+    function inner = card(parent, title, subtitle)
+        % A surface panel with a title and one line under it; returns the body
+        p = uipanel(parent, 'BackgroundColor', col.surface, 'BorderType', 'line', ...
+                    'BorderColor', col.line);
+        grid = uigridlayout(p, [3 1]);
+        grid.RowHeight       = {30, 20, '1x'};
+        grid.RowSpacing      = 4;
+        grid.Padding         = [28 24 28 22];
+        grid.BackgroundColor = col.surface;
+        uilabel(grid, 'Text', title, 'FontName', col.font, 'FontSize', 22, ...
+                'FontWeight', 'bold', 'FontColor', col.text);
+        uilabel(grid, 'Text', subtitle, 'FontName', col.font, 'FontSize', 13, 'FontColor', col.muted);
+        inner = uigridlayout(grid, [3 1]);
+        inner.Padding         = [0 0 0 22];          % [left bottom right top]: air under the subtitle
+        inner.RowSpacing      = 14;
+        inner.BackgroundColor = col.surface;
+    end
+
+    function presetButton(parent, txt, action)
+        uibutton(parent, 'Text', txt, 'FontName', col.font, 'FontSize', 13, ...
+                 'BackgroundColor', col.bg, 'FontColor', col.text2, ...
+                 'ButtonPushedFcn', @(~, ~) action());
+    end
+
+    function formLabel(txt)
+        uilabel(form, 'Text', txt, 'FontName', col.font, 'FontSize', 14, 'FontColor', col.muted);
+    end
+
+    function setBoxes(values)
+        for j = 1:numel(box)
+            box(j).Value = values(j);
+        end
+        changed();
+    end
+
+    function changed()
+        setPending(true);
+    end
+
+    function setPending(on)
+        % Apply lights up while there are choices not applied yet
+        if on
+            btnApply.BackgroundColor = col.accent;      btnApply.FontColor = col.text;
+            lbState.FontColor = col.text2;
+            lbState.Text = 'Changes not applied yet';
+        else
+            btnApply.BackgroundColor = col.accentSoft;  btnApply.FontColor = col.text2;
+            lbState.FontColor = col.dim;
+            lbState.Text = 'Every section is up to date';
+        end
+    end
+
+    function apply()
+        % Check the choices, store them, and redraw every section
+        sel = labels([box.Value]);
+        msg = '';
+        if isempty(sel)
+            msg = 'Choose at least one maturity.';
+        elseif dpTo.Value <= dpFrom.Value
+            msg = 'PCA: "To" must come after "From".';
+        end
+        if ~isempty(msg)
+            lbState.FontColor = col.down;
+            lbState.Text = msg;
+            return
+        end
+
+        new.maturities = sel;
+        new.A = struct('from', dpFrom.Value, 'to', dpTo.Value, 'freq', ddFreq.Value);
+        fig.UserData.settings = new;
+
+        lbState.FontColor = col.muted;
+        lbState.Text = 'Applying...';
+        drawnow;
+        cellfun(@(f) f(), fig.UserData.onApply);
+        setPending(false);
+    end
 end
 
 
@@ -158,10 +373,6 @@ sub        = uitabgroup(g);
 tabToday   = uitab(sub, 'Title', 'Today',   'BackgroundColor', col.bg);
 tabHistory = uitab(sub, 'Title', 'History', 'BackgroundColor', col.bg);
 
-% Mouse moves are sent to every chart; each one reacts only when visible
-fig.UserData.onMove = {};
-fig.WindowButtonMotionFcn = @(src, ~) cellfun(@(f) f(), src.UserData.onMove);
-
 buildTodayTab(fig, tabToday, col, T, maturities, labels);
 buildHistoryTab(fig, tabHistory, col, T, maturities, labels);
 sub.SelectedTab = tabToday;          % always open on Today
@@ -184,7 +395,8 @@ end
 
 % ==========================================================================
 function buildTodayTab(fig, tab, col, T, maturities, labels)
-% Today: header, four key numbers, maturity buttons, chart.
+% Today: header, four key numbers, Fed reference, chart of the maturities
+% chosen in the Control panel.
 
 % 1. Latest day with every maturity, and the complete day before it
 %    (holidays are empty rows)
@@ -209,50 +421,33 @@ buildHeader(page, col, 'Yield Curve US', ['U.S. Treasury constant maturity' dot 
             'as of ' char(asOf, 'dd MMM yyyy') dot 'updated on opening from FRED']);
 buildKeyNumbers(page, col, labels, yields, yieldsPrv);
 
-% Maturity buttons: lit = shown on the chart, dark = hidden
-bar = uigridlayout(page, [1 16]);
-bar.ColumnWidth     = [repmat({56}, 1, 11), {'1x', 74, 76, 90, 70}];
+% Maturities shown: set in the Control panel; here only the Fed reference
+bar = uigridlayout(page, [1 3]);
+bar.ColumnWidth     = {'1x', 74, 76};
 bar.ColumnSpacing   = 6;
 bar.Padding         = [0 0 0 0];
 bar.BackgroundColor = col.bg;
-n   = numel(labels);
-btn = gobjects(1, n);
-for k = 1:n
-    btn(k) = uibutton(bar, 'state', 'Text', char(labels(k)), 'Value', true, ...
-                      'FontName', col.font, 'FontSize', 12, 'FontWeight', 'bold', ...
-                      'ValueChangedFcn', @(~, ~) redraw());
-end
-btn(labels == "15Y").Tooltip = 'Interpolated between 10Y and 20Y';
-uilabel(bar, 'Text', '');
+smallLabel(bar, col, 'Maturities: set in the Control panel');
 ref = addReference(bar, col, @() redraw());
-uibutton(bar, 'Text', 'Select all', 'FontName', col.font, 'BackgroundColor', col.surface, ...
-         'FontColor', col.text2, 'ButtonPushedFcn', @(~, ~) setAll(true));
-uibutton(bar, 'Text', 'Clear', 'FontName', col.font, 'BackgroundColor', col.surface, ...
-         'FontColor', col.text2, 'ButtonPushedFcn', @(~, ~) setAll(false));
 
 ax = makeAxes(page, col);
 sourceNote(page, col);
 
 % Hover: value of the maturity nearest to the mouse
 hov = [];  shownX = [];  shownY = [];  shownNames = strings(0);
-fig.UserData.onMove{end+1} = @onMove;
+fig.UserData.onMove{end+1}  = @onMove;
+fig.UserData.onApply{end+1} = @redraw;      % new maturities from the Control panel
 
 drawnow;          % let the layout settle before the first chart, or the axes come out clipped
 redraw();
 
-    function setAll(value)
-        set(btn, 'Value', value);
-        redraw();
-    end
-
     function redraw()
-        sel = [btn.Value];
-        styleButtons(btn, col);
+        sel = ismember(labels, fig.UserData.settings.maturities);
         shownX = maturities(sel);  shownY = yields(sel);  shownNames = labels(sel);
 
         cla(ax);
         if ~any(sel)
-            text(ax, 0.5, 0.5, 'Select at least one maturity', 'Units', 'normalized', ...
+            text(ax, 0.5, 0.5, 'Select at least one maturity in the Control panel', 'Units', 'normalized', ...
                  'Color', col.muted, 'HorizontalAlignment', 'center', ...
                  'FontName', col.font, 'FontSize', 14);
             styleAxes(ax, col, [0 1], [0 1], [], {});
@@ -357,7 +552,8 @@ sourceNote(page, col);
 % --- Animation state --------------------------------------------------------
 frames = [];  iFrame = 1;  yr = [0 1];
 hov = [];  frameX = [];  frameY = [];  frameNames = strings(0);  mouseIn = false;
-fig.UserData.onMove{end+1} = @onMove;
+fig.UserData.onMove{end+1}  = @onMove;
+fig.UserData.onApply{end+1} = @rebuild;     % new maturities from the Control panel
 tmr = timer('ExecutionMode', 'fixedSpacing', 'BusyMode', 'drop', ...
             'Period', round(1/2, 3), 'TimerFcn', @(~, ~) tick());
 addlistener(fig, 'ObjectBeingDestroyed', @(~, ~) cleanup());
@@ -379,8 +575,9 @@ rebuild();
         if dpTo.Value <= dpFrom.Value
             dpTo.Value = min(lastDay, dpFrom.Value + calmonths(12));
         end
+        sel      = ismember(labels, fig.UserData.settings.maturities);
         inPeriod = T.Time >= dpFrom.Value & T.Time <= dpTo.Value + days(1);
-        enough   = sum(~isnan(T.Variables), 2) >= 3;       % skip empty holidays
+        enough   = sum(~isnan(T{:, sel}), 2) >= min(3, nnz(sel));   % skip empty holidays
         rows = find(inPeriod & enough);
         t = T.Time(rows);
         switch ddStep.Value
@@ -390,6 +587,15 @@ rebuild();
         end
         [~, last] = unique(key, 'last');
         frames = rows(last);
+        if isempty(frames)
+            cla(ax);
+            text(ax, 0.5, 0.5, 'No data for the chosen maturities in this period', ...
+                 'Units', 'normalized', 'Color', col.muted, 'HorizontalAlignment', 'center', ...
+                 'FontName', col.font, 'FontSize', 14);
+            styleAxes(ax, col, [0 1], [0 1], [], {});
+            lbDate.Text = '';  lbStart.Text = '';  lbEnd.Text = '';
+            return
+        end
 
         yr = [];          % the vertical range follows the curve (see showFrame)
         lbTrail.Text = trailLegend(col, trailLength, ddStep.Value);
@@ -484,7 +690,7 @@ rebuild();
 
     function [x, y, names] = curveAt(row)
         y  = T{row, :};
-        ok = ~isnan(y);
+        ok = ~isnan(y) & ismember(labels, fig.UserData.settings.maturities);
         x  = maturities(ok);  y = y(ok);  names = labels(ok);
     end
 
@@ -597,6 +803,367 @@ for k = 1:size(cards, 1)
     end
     uilabel(q, 'Text', note, 'FontName', col.font, 'FontSize', 12, 'FontColor', fc);
 end
+end
+
+
+% ==========================================================================
+function buildPCATab(fig, tab, col, T, maturities, labels)
+% PCA: principal components of the yield LEVELS (Mele, eq. 1) over the period
+% and frequency chosen in the Control panel. Maturities are fixed, those of
+% Mele p. 91 without the 30Y: 1Y ... 20Y, the 15Y interpolated between 10Y
+% and 20Y. Two sub-tabs, like Data Analysis: Loadings (the three shapes
+% against maturity, in years) and Factors (the value of each factor over
+% time). Computed again whenever settings are applied.
+
+pc  = pcaColours(col);
+dot = ['  ' char(183) '  '];
+[T, maturities, labels] = prepareCurve(T, maturities, labels);   % no 30Y, 15Y added
+pcaSet = ["1Y" "2Y" "3Y" "5Y" "7Y" "10Y" "15Y" "20Y"];            % as in Mele, without the 30Y
+note = ['Source: Federal Reserve H.15 via FRED. PCA on the yield levels of 1Y-20Y, as in Mele ' ...
+        'p. 91 without the 30Y; the 15Y is not published and is interpolated between 10Y and ' ...
+        '20Y, so it adds no information of its own. Each period represented by its last day ' ...
+        'with every maturity. Loadings have unit length; ' ...
+        'their sign is a convention, as in Mele p. 91 (PC1 positive, PC2 positive at the ' ...
+        'short end, PC3 positive at both ends). Factor values F = (R - mean R) w, in percentage points.'];
+
+% --- Two sub-tabs filling the section ---------------------------------------
+outer = uigridlayout(tab, [1 1]);
+outer.BackgroundColor = col.bg;
+outer.Padding = [0 0 0 0];
+views   = uitabgroup(outer);
+tabLoad = uitab(views, 'Title', 'Loadings', 'BackgroundColor', col.bg);
+tabFac  = uitab(views, 'Title', 'Factors',  'BackgroundColor', col.bg);
+
+% --- Loadings: header, status, four cards, one chart across the page -------
+loadPage = uigridlayout(tabLoad, [5 1]);
+loadPage.RowHeight       = {56, 20, 92, '1x', 28};
+loadPage.Padding         = [28 20 28 10];
+loadPage.RowSpacing      = 14;
+loadPage.BackgroundColor = col.bg;
+buildHeader(loadPage, col, 'Yield Curve US  |  PCA loadings', ['How each maturity responds ' ...
+            'to the level, slope and curvature factors' dot 'settings from the Control panel']);
+lbStatus(1) = statusLine(loadPage);
+
+cardNames = {'PC1  LEVEL', 'PC2  SLOPE', 'PC3  CURVATURE', 'FIRST THREE'};
+cards = uigridlayout(loadPage, [1 4]);
+cards.ColumnSpacing   = 14;
+cards.Padding         = [0 0 0 0];
+cards.BackgroundColor = col.bg;
+cardValue = gobjects(1, 4);  cardNote = gobjects(1, 4);
+for iCard = 1:4
+    p = uipanel(cards, 'BackgroundColor', col.surface, 'BorderType', 'line', ...
+                'BorderColor', col.line);
+    q = uigridlayout(p, [3 1]);
+    q.RowHeight       = {16, 34, 18};
+    q.RowSpacing      = 2;
+    q.Padding         = [16 10 16 8];
+    q.BackgroundColor = col.surface;
+    uilabel(q, 'Text', cardNames{iCard}, 'FontName', col.mono, 'FontSize', 10, 'FontColor', col.dim);
+    cardValue(iCard) = uilabel(q, 'Text', '', 'FontName', col.font, 'FontSize', 28, ...
+                               'FontWeight', 'bold', 'FontColor', col.text);
+    cardNote(iCard)  = uilabel(q, 'Text', '', 'FontName', col.font, 'FontSize', 12, ...
+                               'FontColor', col.muted);
+end
+charts = uigridlayout(loadPage, [1 1]);
+charts.Padding         = [0 0 0 0];
+charts.BackgroundColor = col.bg;
+noteLine(loadPage);
+
+% --- Factors: header, status, three charts stacked, using all the height ----
+facOuter = uigridlayout(tabFac, [4 1]);
+facOuter.RowHeight       = {56, 20, '1x', 28};
+facOuter.Padding         = [28 20 28 10];
+facOuter.RowSpacing      = 14;
+facOuter.BackgroundColor = col.bg;
+buildHeader(facOuter, col, 'Yield Curve US  |  PCA factors', ['Value of the level, slope and ' ...
+            'curvature factors over time' dot 'settings from the Control panel']);
+lbStatus(2) = statusLine(facOuter);
+facPage = uigridlayout(facOuter, [1 1]);
+facPage.Padding         = [0 0 0 0];
+facPage.BackgroundColor = col.bg;
+noteLine(facOuter);
+
+% --- Behaviour ------------------------------------------------------------
+hovers = {};
+fig.UserData.onMove{end+1}  = @onMove;
+fig.UserData.onApply{end+1} = @run;          % new settings from the Control panel
+drawnow;
+run();
+
+    function run()
+        s    = fig.UserData.settings;
+        keep = ismember(labels, pcaSet);
+
+        shown = views.SelectedTab;                    % stay on the view being looked at
+        restoreView = onCleanup(@() showView(shown));
+        delete(charts.Children);
+        delete(facPage.Children);
+        hovers = {};
+        set(cardValue, 'Text', char(8211));  set(cardNote, 'Text', '');
+
+        % Data: yield levels of the chosen maturities, one row per period
+        [X, info, dates] = pcaSample(T, keep, s.A.from, s.A.to, s.A.freq, true);
+        set(lbStatus, 'Text', sprintf('<b>%s</b>%s%s %s %s%s%s levels%s%d observations', ...
+                                strjoin(labels(keep), ' '), dot, char(s.A.from, 'dd MMM yyyy'), ...
+                                char(8211), char(s.A.to, 'dd MMM yyyy'), dot, lower(s.A.freq), ...
+                                dot, info.n));
+        if info.n < nnz(keep) + 1
+            msg = sprintf(['Only %d observations for %d maturities: widen the period ' ...
+                           'or choose a higher frequency in the Control panel.'], info.n, nnz(keep));
+        else
+            msg = '';
+        end
+        if ~isempty(msg)
+            showError(charts, msg);
+            showError(facPage, msg);
+            return
+        end
+
+        [W, lambda, share, F] = pca_curva(X);
+        fillCards(lambda, share, info.n);
+        drawLoadings(chartCell(charts, loadingsTitle()), maturities(keep), labels(keep), W);
+        drawFactors(F / 100, share, dates);           % bp -> percentage points
+    end
+
+    function fillCards(lambda, share, n)
+        % Share of each component, its size in bp, and the total of the first three
+        for k = 1:3
+            cardValue(k).Text = sprintf('%.1f%%', 100*share(k));
+            cardNote(k).Text  = sprintf('sd %.0f bp', sqrt(lambda(k)));
+        end
+        cardValue(4).Text = sprintf('%.1f%%', 100*sum(share(1:3)));
+        cardNote(4).Text  = sprintf('%d observations', n);
+    end
+
+    function showView(t)
+        % Redrawing a view can leave the window showing the first sub-tab while
+        % the other one is selected: select the other one, then the right one
+        if ~isvalid(views), return, end
+        other = tabLoad;
+        if t == tabLoad, other = tabFac; end
+        views.SelectedTab = other;  drawnow;
+        views.SelectedTab = t;      drawnow;
+    end
+
+    function showError(parent, msg)
+        uilabel(parent, 'Text', msg, 'FontName', col.font, 'FontSize', 15, ...
+                'FontColor', col.down, 'HorizontalAlignment', 'center', 'WordWrap', 'on');
+    end
+
+    function lb = statusLine(parent)
+        lb = uilabel(parent, 'Text', '', 'Interpreter', 'html', 'FontName', col.font, ...
+                     'FontSize', 12, 'FontColor', col.muted);
+    end
+
+    function noteLine(parent)
+        uilabel(parent, 'Text', note, 'FontName', col.font, 'FontSize', 10, ...
+                'FontColor', col.dim, 'WordWrap', 'on');
+    end
+
+    function ax = chartCell(parent, titleHtml)
+        % Title line (with its own colour key) above a chart
+        g = uigridlayout(parent, [2 1]);
+        g.RowHeight       = {22, '1x'};
+        g.RowSpacing      = 4;
+        g.Padding         = [0 0 0 0];
+        g.BackgroundColor = col.bg;
+        uilabel(g, 'Text', titleHtml, 'Interpreter', 'html', 'FontName', col.font, ...
+                'FontSize', 12, 'FontColor', col.text2);
+        ax = makeAxes(g, col);
+    end
+
+    function s = loadingsTitle()
+        % "Factor loadings" + key of the three colours
+        s = sprintf(['<b>Factor loadings</b>&nbsp;&nbsp;&nbsp; <b style="color:%s">&#9644;</b> level' ...
+                     '&nbsp; <b style="color:%s">&#9644;</b> slope&nbsp; ' ...
+                     '<b style="color:%s">&#9644;</b> curvature'], ...
+                    cssColour(pc.lev), cssColour(pc.slo), cssColour(pc.cur));
+    end
+
+    function drawLoadings(ax, x, names, W)
+        % The first three loadings against maturity in years, one colour per
+        % component; fixed axis 0-20 years, a tick every 5, as in Mele p. 91
+        hold(ax, 'on');
+        yline(ax, 0, '-', 'Color', blend(col.bg, col.text, 0.25), 'LineWidth', 0.75);
+        colours = {pc.lev, pc.slo, pc.cur};
+        for k = 1:3
+            plot(ax, x, W(:, k), '-', 'Color', colours{k}, 'LineWidth', 2, ...
+                 'Marker', 'o', 'MarkerSize', 6, 'MarkerFaceColor', colours{k});
+        end
+        h.ax    = ax;  h.x = x;  h.names = names;  h.W = W;
+        h.guide = plot(ax, NaN, NaN, '-', 'Color', blend(col.bg, col.text, 0.25), 'LineWidth', 1);
+        h.box   = text(ax, NaN, NaN, '', 'Color', col.text, 'BackgroundColor', col.surface, ...
+                       'EdgeColor', col.line, 'Margin', 7, 'FontName', col.mono, 'FontSize', 11, ...
+                       'VerticalAlignment', 'top', 'Interpreter', 'none', 'Visible', 'off');
+        hold(ax, 'off');
+
+        lim = max(abs(W(:, 1:3)), [], 'all');
+        yl  = [-1 1] * min(1, ceil((lim + 0.05)*10)/10);
+        tk  = 0:5:20;
+        styleAxes(ax, col, [0 20.5], yl, tk, arrayfun(@(v) sprintf('%d', v), tk, 'UniformOutput', false));
+        xlabel(ax, 'Maturity (years)', 'Color', col.muted, 'FontName', col.font, 'FontSize', 12);
+        yticks(ax, yl(1):0.1:yl(2));
+        ytickformat(ax, '%.1f');
+        hovers{end+1} = h;
+    end
+
+    function drawFactors(F, share, dates)
+        % Factors over time: the value of each of the first three factors on
+        % every date, F = (R - mean R) * w, in percentage points
+        g = uigridlayout(facPage, [3 1]);
+        g.RowSpacing      = 10;
+        g.Padding         = [0 0 0 0];
+        g.BackgroundColor = col.bg;
+        names   = {'level', 'slope', 'curvature'};
+        colours = {pc.lev, pc.slo, pc.cur};
+        [tk, tl] = yearTicks(dates(1), dates(end));
+        for k = 1:3
+            ax = chartCell(g, sprintf(['<b style="color:%s">PC%d</b>&nbsp; <b>%s</b>' ...
+                           '&nbsp;&nbsp; %.1f%% of the variance'], ...
+                           cssColour(colours{k}), k, names{k}, 100*share(k)));
+            plot(ax, dates, F(:, k), '-', 'Color', colours{k}, 'LineWidth', 1.4);  % sets a date axis
+            hold(ax, 'on');
+            yline(ax, 0, '-', 'Color', blend(col.bg, col.text, 0.25), 'LineWidth', 0.75);
+            h.ax    = ax;  h.dates = dates;  h.y = F(:, k);
+            h.guide = plot(ax, dates([1 1]), [NaN NaN], '-', 'Color', blend(col.bg, col.text, 0.25), ...
+                           'LineWidth', 1);
+            h.dot   = plot(ax, dates(1), NaN, 'o', 'MarkerSize', 6, 'MarkerFaceColor', colours{k}, ...
+                           'MarkerEdgeColor', col.bg);
+            h.box   = text(ax, dates(1), NaN, '', 'Color', col.text, 'BackgroundColor', col.surface, ...
+                           'EdgeColor', col.line, 'Margin', 5, 'FontName', col.font, 'FontSize', 11, ...
+                           'VerticalAlignment', 'top', 'Visible', 'off');
+            hold(ax, 'off');
+            lo = min(F(:, k));  hi = max(F(:, k));  pad = 0.04*max(hi - lo, 0.1);
+            styleAxes(ax, col, [dates(1) dates(end)], [lo - pad, hi + pad], tk, tl);
+            [yt, fmt] = fineTicks(lo - pad, hi + pad);    % dense grid: read the values
+            yticks(ax, yt);
+            ytickformat(ax, fmt);            hovers{end+1} = h;
+        end
+    end
+
+    function onMove()
+        % Hover: loadings at the nearest maturity, or factor value at the nearest date
+        if tab.Parent.SelectedTab ~= tab, return, end
+        for i = 1:numel(hovers)
+            h = hovers{i};
+            if ~isvalid(h.ax), continue, end
+            if isfield(h, 'dates')
+                seriesHover(h);
+            else
+                loadingsHover(h);
+            end
+        end
+    end
+
+    function loadingsHover(h)
+        cp = h.ax.CurrentPoint;
+        xl = xlim(h.ax);  yl = ylim(h.ax);
+        if cp(1,1) < xl(1) || cp(1,1) > xl(2) || cp(1,2) < yl(1) || cp(1,2) > yl(2)
+            set(h.guide, 'XData', NaN, 'YData', NaN);
+            h.box.Visible = 'off';
+            return
+        end
+        [~, j] = min(abs(h.x - cp(1,1)));
+        set(h.guide, 'XData', [h.x(j) h.x(j)], 'YData', yl);
+        rows = {sprintf('%-4s  level  slope   curv.', char(h.names(j))), ...
+                sprintf('     %+6.2f %+6.2f %+6.2f', h.W(j, 1:3))};
+        align = 'left';
+        if (h.x(j) - xl(1)) / diff(xl) > 0.6, align = 'right'; end
+        set(h.box, 'Position', [h.x(j), yl(2) - 0.03*diff(yl), 0], ...
+            'HorizontalAlignment', align, 'String', rows, 'Visible', 'on');
+    end
+
+    function seriesHover(h)
+        cp = h.ax.CurrentPoint;
+        x  = num2ruler(cp(1,1), h.ax.XAxis);
+        xl = xlim(h.ax);  yl = ylim(h.ax);
+        if x < xl(1) || x > xl(2) || cp(1,2) < yl(1) || cp(1,2) > yl(2)
+            set(h.guide, 'YData', [NaN NaN]);  set(h.dot, 'YData', NaN);
+            h.box.Visible = 'off';
+            return
+        end
+        [~, j] = min(abs(h.dates - x));
+        set(h.guide, 'XData', h.dates([j j]), 'YData', yl);
+        set(h.dot,   'XData', h.dates(j),     'YData', h.y(j));
+        align = 'left';
+        if (h.dates(j) - xl(1)) / (xl(2) - xl(1)) > 0.75, align = 'right'; end
+        set(h.box, 'Position', [ruler2num(h.dates(j), h.ax.XAxis), yl(2) - 0.04*diff(yl), 0], ...
+            'HorizontalAlignment', align, 'Visible', 'on', ...
+            'String', sprintf(' %s   %+.2f ', char(h.dates(j), 'dd MMM yyyy'), h.y(j)));
+    end
+end
+
+function [yt, fmt] = fineTicks(lo, hi)
+% About ten round ticks between lo and hi, and the number format that suits them
+steps = [0.1 0.2 0.25 0.5 1 2 2.5 5 10];
+step  = steps(find((hi - lo) ./ steps <= 12, 1));
+if isempty(step), step = 20; end
+yt = (ceil(lo/step)*step):step:hi;
+if step < 1, fmt = '%.1f%%'; else, fmt = '%.0f%%'; end
+if step == 0.25, fmt = '%.2f%%'; end
+end
+
+function [tk, tl] = yearTicks(t0, t1)
+% Ticks on 1 January, every 1, 2, 5 or 10 years so that there are at most ten
+span = year(t1) - year(t0) + 1;
+step = [1 2 5 10];
+step = step(find(span ./ step <= 10, 1));
+if isempty(step), step = 20; end
+yrs = (ceil(year(t0)/step)*step):step:year(t1);
+tk  = datetime(yrs, 1, 1);
+tk  = tk(tk >= t0 & tk <= t1);
+tl  = cellstr(string(year(tk)));
+end
+
+function pc = pcaColours(col)
+% Colours of the PCA section: one per component
+pc.lev = col.accent;          % level: the blue of the curve
+pc.slo = col.trailNew;        % slope: teal
+pc.cur = col.trailOld;        % curvature: soft violet
+end
+
+function [X, info, dates] = pcaSample(T, keep, from, to, freq, levels)
+% Data for the PCA: the chosen maturities between from and to, one row per
+% period (its last day with every maturity), in bp. With levels = false, the
+% changes between consecutive periods only (a gap in the data is skipped).
+% dates: the date of each row of X (for a change, the day it ends).
+in = T.Time >= from & T.Time <= to;
+V  = T{in, keep};
+t  = T.Time(in);
+ok = all(~isnan(V), 2);
+V  = V(ok, :);  t = t(ok);
+info = struct('n', 0, 'first', NaT, 'last', NaT);
+dates = t([]);
+if isempty(t)
+    X = zeros(0, nnz(keep));
+    return
+end
+
+origin = datetime(1962, 1, 1);               % a Monday: weeks run Monday-Sunday
+switch freq
+    case 'Daily',  key = days(t - origin);   maxStep = 5;   % weekend + a holiday
+    case 'Weekly', key = floor(days(t - origin) / 7);  maxStep = 1;
+    otherwise,     key = year(t)*12 + month(t);        maxStep = 1;
+end
+[key, last] = unique(key, 'last');
+V = V(last, :);  t = t(last);
+
+if levels
+    X = 100 * V;
+    dates = t;
+    info.first = t(1);
+else
+    X    = 100 * diff(V);
+    good = diff(key) <= maxStep;
+    X    = X(good, :);
+    ends = t(2:end);
+    dates = ends(good);
+    if numel(t) > 1
+        info.first = t(1);
+    end
+end
+info.last = t(end);
+info.n    = size(X, 1);
 end
 
 
@@ -757,17 +1324,6 @@ try                                   % hide the axis lines, keep the numbers
     ax.XRuler.Axle.Visible = 'off';
     ax.YRuler.Axle.Visible = 'off';
 catch
-end
-end
-
-function styleButtons(btn, col)
-% Lit buttons in blue, the others dark
-for j = 1:numel(btn)
-    if btn(j).Value
-        btn(j).BackgroundColor = col.accentSoft;  btn(j).FontColor = col.text;
-    else
-        btn(j).BackgroundColor = col.surface;     btn(j).FontColor = col.dim;
-    end
 end
 end
 
