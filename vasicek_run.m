@@ -1,4 +1,4 @@
-% VASICEK_RUN  Estimate the Vasicek model on U.S. Treasury yields, 2010 - today.
+% VASICEK_RUN  Estimate the Vasicek model on U.S. Treasury yields, 2000 - today.
 %   Runs at daily and monthly frequency and shows, for each:
 %     - the parameter table (with standard errors)
 %     - the model curve vs the observed curve on the last date
@@ -6,7 +6,7 @@
 %   Everything that can change (sample start, horizon) is set here, not inside
 %   the model functions.
 
-from     = datetime(2010, 1, 1);    % sample start
+from     = datetime(2000, 1, 1);    % sample start (from 2010 the 3M shows no mean reversion: b >= 1)
 hMonths  = 3;                       % forecast horizon in months
 freqs    = ["daily" "monthly"];
 
