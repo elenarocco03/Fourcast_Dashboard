@@ -1,0 +1,15 @@
+#!/bin/sh
+# Project journal check: every commit on main must update report/JOURNAL.md.
+# Enable once per clone with:  git config core.hooksPath .githooks
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+[ "$branch" = "main" ] || exit 0
+
+if git diff --cached --name-only | grep -qx "report/JOURNAL.md"; then
+    exit 0
+fi
+
+echo "Commit blocked: on main every commit must update report/JOURNAL.md." >&2
+echo "Ask your agent to update the journal (/journal in Claude Code), or add an entry" >&2
+echo "by hand following the template at the top of the file, then commit again." >&2
+exit 1

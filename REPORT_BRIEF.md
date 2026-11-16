@@ -24,7 +24,9 @@ variant** it says **what we did, how, and which decisions we took and why**.
 2. The code and what it outputs: **this is what we did**. Every number in the report
    must come from running our scripts. Never invent or round off results by hand; if a
    number is not available yet, write `[TODO: ...]`.
-3. `MODELS_PLAN.md` and the git log (commit messages): the decisions and their reasons.
+3. `report/JOURNAL.md` (one entry per working session: results, decisions with their
+   reasons, limitations, open points), `MODELS_PLAN.md` and the git log: the decisions and
+   their reasons. Start from the journal and resolve its `[TODO: ask ...]` items with the user.
 4. `theory/md/models_reference.md` (formulas with page references) and `theory/md/`:
    notation and theory. Use the notation of the course (Mele notes, Tutorials 1-4).
 
